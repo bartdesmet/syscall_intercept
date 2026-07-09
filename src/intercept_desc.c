@@ -111,16 +111,19 @@ find_sections(struct intercept_desc *desc, int fd)
 
 	xread(fd, &elf_header, sizeof(elf_header));
 
-	Elf64_Shdr sec_headers[elf_header.e_shnum];
+	size_t sec_headers_size =
+	    elf_header.e_shnum * sizeof(Elf64_Shdr);
+	Elf64_Shdr *sec_headers = xmmap_anon(sec_headers_size);
 
 	xlseek(fd, elf_header.e_shoff, SEEK_SET);
-	xread(fd, sec_headers, elf_header.e_shnum * sizeof(Elf64_Shdr));
+	xread(fd, sec_headers, sec_headers_size);
 
-	char sec_string_table[sec_headers[elf_header.e_shstrndx].sh_size];
+	size_t sec_string_table_size =
+	    sec_headers[elf_header.e_shstrndx].sh_size;
+	char *sec_string_table = xmmap_anon(sec_string_table_size);
 
 	xlseek(fd, sec_headers[elf_header.e_shstrndx].sh_offset, SEEK_SET);
-	xread(fd, sec_string_table,
-	    sec_headers[elf_header.e_shstrndx].sh_size);
+	xread(fd, sec_string_table, sec_string_table_size);
 
 	bool text_section_found = false;
 
@@ -142,6 +145,9 @@ find_sections(struct intercept_desc *desc, int fd)
 			add_table_info(&desc->rela_tables, section);
 		}
 	}
+
+	xmunmap(sec_string_table, sec_string_table_size);
+	xmunmap(sec_headers, sec_headers_size);
 
 	if (!text_section_found)
 		xabort("text section not found");
@@ -296,10 +302,14 @@ find_jumps_in_section_syms(struct intercept_desc *desc, Elf64_Shdr *section,
 
 	size_t sym_count = section->sh_size / sizeof(Elf64_Sym);
 
-	Elf64_Sym syms[sym_count];
+	if (sym_count == 0)
+		return;
+
+	size_t syms_size = sym_count * sizeof(Elf64_Sym);
+	Elf64_Sym *syms = xmmap_anon(syms_size);
 
 	xlseek(fd, section->sh_offset, SEEK_SET);
-	xread(fd, &syms, section->sh_size);
+	xread(fd, syms, syms_size);
 
 	for (size_t i = 0; i < sym_count; ++i) {
 		if (ELF64_ST_TYPE(syms[i].st_info) != STT_FUNC)
@@ -320,6 +330,8 @@ find_jumps_in_section_syms(struct intercept_desc *desc, Elf64_Shdr *section,
 		if (syms[i].st_size != 0)
 			mark_jump(desc, address + syms[i].st_size);
 	}
+
+	xmunmap(syms, syms_size);
 }
 
 /*
@@ -346,10 +358,14 @@ find_jumps_in_section_rela(struct intercept_desc *desc, Elf64_Shdr *section,
 
 	size_t sym_count = section->sh_size / sizeof(Elf64_Rela);
 
-	Elf64_Rela syms[sym_count];
+	if (sym_count == 0)
+		return;
+
+	size_t syms_size = sym_count * sizeof(Elf64_Rela);
+	Elf64_Rela *syms = xmmap_anon(syms_size);
 
 	xlseek(fd, section->sh_offset, SEEK_SET);
-	xread(fd, &syms, section->sh_size);
+	xread(fd, syms, syms_size);
 
 	for (size_t i = 0; i < sym_count; ++i) {
 		switch (ELF64_R_TYPE(syms[i].r_info)) {
@@ -368,6 +384,8 @@ find_jumps_in_section_rela(struct intercept_desc *desc, Elf64_Shdr *section,
 				break;
 		}
 	}
+
+	xmunmap(syms, syms_size);
 }
 
 /*
